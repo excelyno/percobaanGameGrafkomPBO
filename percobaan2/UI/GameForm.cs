@@ -1,39 +1,49 @@
-using FarmGame;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
+using FarmGame.Core;
+using FarmGame.Entities;
+using FarmGame.Systems;
+using FarmGame.Tools;
 using Timer = System.Windows.Forms.Timer;
 
-namespace FarmGame;
+namespace FarmGame.UI;
 
-static class Program
-{
-    [STAThread]
-    static void Main()
-    {
-        ApplicationConfiguration.Initialize();
-        Application.Run(new GameForm());
-    }
-}
+// ============================================================
+//  FORM UTAMA: Rendering + Input + Game Loop
+// ============================================================
 
+/// <summary>
+/// Form utama game. Bertanggung jawab atas:
+/// - Game loop (Timer tick → Update → Invalidate → OnPaint)
+/// - Routing input keyboard dan mouse
+/// - Rendering semua layer (sky, farm, HUD, minigame)
+/// - Implementasi IGameContext (jembatan antara Tools dan state game)
+/// </summary>
 public class GameForm : Form, IGameContext
 {
+    // ---- Konstanta layout ----
     private const int W = 960, H = 700;
     private const int Cols = 8, Rows = 5, TileSize = 72;
     private const int OriginX = (W - Cols * TileSize) / 2, OriginY = 250;
 
+    // ---- Data game ----
     private readonly Tile[,] _grid = new Tile[Cols, Rows];
-    private readonly Tool[] _tools;
+    private Tool[] _tools = Array.Empty<Tool>();
     private int _toolIdx;
+    private int _money = 50;
 
+    // ---- Sistem ----
     private readonly DayNightCycle _clock = new();
     private readonly Rain _rain = new(W, H);
+    private HarvestMinigame? _mini;
+
+    // ---- Utilitas ----
     private readonly Random _rng = new();
     private readonly Timer _timer = new() { Interval = 16 };
     private readonly Stopwatch _sw = Stopwatch.StartNew();
-
-    private HarvestMinigame? _mini;
-    private int _money = 50;
     private float _time;
+
+    // ---- UI state ----
     private Point _mouse;
     private string _toast = "";
     private float _toastT;
@@ -41,9 +51,13 @@ public class GameForm : Form, IGameContext
     private readonly Font _hud = new("Segoe UI", 11f, FontStyle.Bold);
     private readonly Font _small = new("Segoe UI", 9f, FontStyle.Bold);
 
+    // ---- Dekorasi awan ----
     private class Cloud { public float X, Y, Scale, Speed; }
     private readonly List<Cloud> _clouds = new();
 
+    // ===========================================================
+    //  CONSTRUCTOR
+    // ===========================================================
     public GameForm()
     {
         Text = "Agro Farm - Prototype (WinForms + GDI+)";
@@ -55,35 +69,53 @@ public class GameForm : Form, IGameContext
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer, true);
 
-        for (int c = 0; c < Cols; c++)
-            for (int r = 0; r < Rows; r++)
-                _grid[c, r] = new Tile(new Rectangle(OriginX + c * TileSize, OriginY + r * TileSize, TileSize, TileSize));
-
-        _tools = new Tool[]
-        {
-            new HoeTool(),
-            new WateringCan(),
-            new SeedBag("Gandum", 5, () => new Wheat()),
-            new SeedBag("Jagung", 8, () => new Corn()),
-            new SeedBag("Tomat", 6, () => new Tomato()),
-            new Sickle()
-        };
-
-        for (int i = 0; i < 5; i++)
-            _clouds.Add(new Cloud
-            {
-                X = _rng.Next(W),
-                Y = 30 + _rng.Next(90),
-                Scale = 0.7f + (float)_rng.NextDouble() * 0.8f,
-                Speed = 8 + _rng.Next(14)
-            });
+        InitGrid();
+        InitTools();
+        InitClouds();
 
         _clock.NewDay += OnNewDay;
         _timer.Tick += (_, _) => GameTick();
         _timer.Start();
     }
 
-    // ---------------- IGameContext ----------------
+    // ===========================================================
+    //  INISIALISASI
+    // ===========================================================
+    private void InitGrid()
+    {
+        for (int c = 0; c < Cols; c++)
+            for (int r = 0; r < Rows; r++)
+                _grid[c, r] = new Tile(new Rectangle(OriginX + c * TileSize, OriginY + r * TileSize, TileSize, TileSize));
+    }
+
+    private void InitTools()
+    {
+        _tools = new Tool[]
+        {
+            new HoeTool(),
+            new WateringCan(),
+            new SeedBag("Gandum", 5, () => new Wheat()),
+            new SeedBag("Jagung", 8, () => new Corn()),
+            new SeedBag("Tomat",  6, () => new Tomato()),
+            new Sickle()
+        };
+    }
+
+    private void InitClouds()
+    {
+        for (int i = 0; i < 5; i++)
+            _clouds.Add(new Cloud
+            {
+                X     = _rng.Next(W),
+                Y     = 30 + _rng.Next(90),
+                Scale = 0.7f + (float)_rng.NextDouble() * 0.8f,
+                Speed = 8 + _rng.Next(14)
+            });
+    }
+
+    // ===========================================================
+    //  IGameContext
+    // ===========================================================
     public void Toast(string message) { _toast = message; _toastT = 2f; }
     public void BeginHarvest(Tile tile) => _mini = new HarvestMinigame(tile);
     public bool TrySpend(int amount)
@@ -93,18 +125,9 @@ public class GameForm : Form, IGameContext
         return true;
     }
 
-    // ---------------- Logika ----------------
-    private void OnNewDay()
-    {
-        foreach (var t in _grid)
-        {
-            t.Crop?.OnDayPassed(t.Soil == SoilState.Watered);
-            if (t.Soil == SoilState.Watered) t.Soil = SoilState.Tilled;
-        }
-        _rain.Active = _rng.NextDouble() < 0.25;
-        Toast(_rain.Active ? $"Hari {_clock.Day}: hujan hari ini!" : $"Hari {_clock.Day} dimulai.");
-    }
-
+    // ===========================================================
+    //  GAME LOOP
+    // ===========================================================
     private void GameTick()
     {
         float dt = Math.Min(0.05f, (float)_sw.Elapsed.TotalSeconds);
@@ -128,15 +151,29 @@ public class GameForm : Form, IGameContext
         {
             _mini.Update(dt);
             if (_mini.Done) FinishHarvest();
-            return; // waktu berhenti saat minigame
+            return; // waktu berhenti saat minigame aktif
         }
 
         _clock.Update(dt);
         _rain.Update(dt);
 
+        // Hujan otomatis menyiram tile yang sudah dicangkul
         if (_rain.Active)
             foreach (var t in _grid)
                 if (t.Soil == SoilState.Tilled) t.Soil = SoilState.Watered;
+    }
+
+    private void OnNewDay()
+    {
+        foreach (var t in _grid)
+        {
+            t.Crop?.OnDayPassed(t.Soil == SoilState.Watered);
+            if (t.Soil == SoilState.Watered) t.Soil = SoilState.Tilled;
+        }
+        _rain.Active = _rng.NextDouble() < 0.25;
+        Toast(_rain.Active
+            ? $"Hari {_clock.Day}: hujan hari ini!"
+            : $"Hari {_clock.Day} dimulai.");
     }
 
     private void FinishHarvest()
@@ -153,7 +190,9 @@ public class GameForm : Form, IGameContext
         _mini = null;
     }
 
-    // ---------------- Input ----------------
+    // ===========================================================
+    //  INPUT
+    // ===========================================================
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
@@ -181,7 +220,7 @@ public class GameForm : Form, IGameContext
         base.OnMouseDown(e);
         if (_mini != null || e.Button != MouseButtons.Left) return;
 
-        // klik toolbar
+        // Klik toolbar
         for (int i = 0; i < _tools.Length; i++)
             if (ToolSlot(i).Contains(e.Location)) { _toolIdx = i; return; }
 
@@ -189,6 +228,9 @@ public class GameForm : Form, IGameContext
         if (tile != null) _tools[_toolIdx].Use(tile, this);
     }
 
+    // ===========================================================
+    //  HELPER LAYOUT
+    // ===========================================================
     private Tile? TileAt(Point p)
     {
         int c = (p.X - OriginX) / TileSize, r = (p.Y - OriginY) / TileSize;
@@ -198,12 +240,14 @@ public class GameForm : Form, IGameContext
 
     private Rectangle ToolSlot(int i)
     {
-        int slotW = 130, gap = 8;
+        const int slotW = 130, gap = 8;
         int total = _tools.Length * slotW + (_tools.Length - 1) * gap;
         return new Rectangle((W - total) / 2 + i * (slotW + gap), 636, slotW, 50);
     }
 
-    // ---------------- Render ----------------
+    // ===========================================================
+    //  RENDER — layer-by-layer
+    // ===========================================================
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
@@ -232,6 +276,7 @@ public class GameForm : Form, IGameContext
         }
     }
 
+    // ---- Layer: Langit ----
     private void DrawSky(Graphics g, float d)
     {
         Color top = Gfx.Lerp(Color.FromArgb(8, 10, 35), Color.FromArgb(70, 150, 255), d);
@@ -245,6 +290,7 @@ public class GameForm : Form, IGameContext
         g.FillRectangle(br, 0, 0, W, 270);
     }
 
+    // ---- Layer: Matahari / Bulan ----
     private void DrawCelestial(Graphics g, float d)
     {
         float t = _clock.ArcT;
@@ -268,6 +314,7 @@ public class GameForm : Form, IGameContext
         }
     }
 
+    // ---- Layer: Awan ----
     private void DrawClouds(Graphics g, float d)
     {
         Color col = Gfx.Lerp(Color.FromArgb(190, 70, 75, 110), Color.FromArgb(200, 255, 255, 255), d);
@@ -286,6 +333,7 @@ public class GameForm : Form, IGameContext
         }
     }
 
+    // ---- Layer: Kincir angin ----
     private void DrawWindmill(Graphics g, float x, float y, float d)
     {
         Color wall = Gfx.Lerp(Color.FromArgb(120, 85, 70), Color.FromArgb(205, 165, 125), d);
@@ -295,7 +343,7 @@ public class GameForm : Form, IGameContext
         g.FillPolygon(wallBr, new[]
         {
             new PointF(x - 22, y + 100), new PointF(x + 22, y + 100),
-            new PointF(x + 12, y), new PointF(x - 12, y)
+            new PointF(x + 12, y),       new PointF(x - 12, y)
         });
         g.FillPolygon(roofBr, new[]
         {
@@ -318,6 +366,7 @@ public class GameForm : Form, IGameContext
         g.FillEllipse(hub, x - 6, y - 6, 12, 12);
     }
 
+    // ---- Layer: Bukit ----
     private void DrawHills(Graphics g, float d)
     {
         DrawHillLayer(g, new PointF[]
@@ -331,8 +380,8 @@ public class GameForm : Form, IGameContext
         }, Gfx.Lerp(Color.FromArgb(25, 60, 40), Color.FromArgb(80, 150, 85), d));
 
         using var ground = new LinearGradientBrush(new Rectangle(0, 240, W, H - 240),
-            Gfx.Lerp(Color.FromArgb(30, 70, 45), Color.FromArgb(100, 175, 75), d),
-            Gfx.Lerp(Color.FromArgb(20, 50, 35), Color.FromArgb(60, 130, 55), d), 90f);
+            Gfx.Lerp(Color.FromArgb(30, 70, 45),  Color.FromArgb(100, 175, 75), d),
+            Gfx.Lerp(Color.FromArgb(20, 50, 35),  Color.FromArgb(60, 130, 55),  d), 90f);
         g.FillRectangle(ground, 0, 240, W, H - 240);
     }
 
@@ -347,19 +396,22 @@ public class GameForm : Form, IGameContext
         g.FillPath(br, path);
     }
 
+    // ---- Layer: Lahan & Tanaman ----
     private void DrawFarm(Graphics g)
     {
         var hover = TileAt(_mouse);
 
-        // lahan
+        // Gambar tile tanah
         foreach (var t in _grid)
         {
             Rectangle b = t.Bounds;
             Color baseCol = t.Soil switch
             {
-                SoilState.Tilled => Color.FromArgb(125, 85, 48),
+                SoilState.Tilled  => Color.FromArgb(125, 85, 48),
                 SoilState.Watered => Color.FromArgb(78, 52, 32),
-                _ => ((b.X / TileSize + b.Y / TileSize) % 2 == 0) ? Color.FromArgb(96, 170, 72) : Color.FromArgb(88, 160, 66)
+                _ => ((b.X / TileSize + b.Y / TileSize) % 2 == 0)
+                    ? Color.FromArgb(96, 170, 72)
+                    : Color.FromArgb(88, 160, 66)
             };
 
             using var fill = new SolidBrush(baseCol);
@@ -376,12 +428,12 @@ public class GameForm : Form, IGameContext
             g.DrawRectangle(edge, b);
         }
 
-        // tanaman digambar per baris (urutan depth)
+        // Gambar tanaman per baris (painter's algorithm / depth sort)
         for (int r = 0; r < Rows; r++)
             for (int c = 0; c < Cols; c++)
                 _grid[c, r].Crop?.Draw(g, _time); // POLYMORPHISM
 
-        // highlight tile di bawah mouse
+        // Highlight tile di bawah mouse
         if (hover != null && _mini == null)
         {
             using var hb = new SolidBrush(Color.FromArgb(55, 255, 255, 255));
@@ -391,12 +443,14 @@ public class GameForm : Form, IGameContext
         }
     }
 
+    // ---- Layer: HUD ----
     private void DrawHud(Graphics g)
     {
-        // panel info kiri atas
+        // Panel info kiri atas
         int hh = (int)_clock.Hour;
         int mm = (int)((_clock.Hour - hh) * 60) / 10 * 10;
-        string info = $"Hari {_clock.Day}   {hh:00}:{mm:00}   Uang: {_money}g" + (_rain.Active ? "   [Hujan]" : "");
+        string info = $"Hari {_clock.Day}   {hh:00}:{mm:00}   Uang: {_money}g" +
+                      (_rain.Active ? "   [Hujan]" : "");
 
         var panel = new RectangleF(12, 12, 340, 34);
         using (var p = Gfx.RoundRect(panel, 10))
@@ -404,18 +458,18 @@ public class GameForm : Form, IGameContext
             g.FillPath(f, p);
         g.DrawString(info, _hud, Brushes.White, 24, 18);
 
-        // bantuan
+        // Bantuan keyboard kanan atas
         using var sfR = new StringFormat { Alignment = StringAlignment.Far };
         g.DrawString("[1-6] pilih alat   [R] hujan   [N] skip hari   Klik tile untuk pakai alat",
             _small, Brushes.White, new RectangleF(0, 20, W - 14, 20), sfR);
 
-        // toolbar
+        // Toolbar bawah
         for (int i = 0; i < _tools.Length; i++)
         {
             var slot = ToolSlot(i);
             bool sel = i == _toolIdx;
-            using var path = Gfx.RoundRect(slot, 10);
-            using var bg = new SolidBrush(Color.FromArgb(sel ? 230 : 170, sel ? 90 : 20, sel ? 70 : 20, sel ? 20 : 20));
+            using var path   = Gfx.RoundRect(slot, 10);
+            using var bg     = new SolidBrush(Color.FromArgb(sel ? 230 : 170, sel ? 90 : 20, sel ? 70 : 20, sel ? 20 : 20));
             using var border = new Pen(sel ? Color.Gold : Color.FromArgb(120, 255, 255, 255), sel ? 3f : 1.5f);
             g.FillPath(bg, path);
             g.DrawPath(border, path);
@@ -424,18 +478,21 @@ public class GameForm : Form, IGameContext
             g.DrawString($"{i + 1}\n{_tools[i].Label}", _small, Brushes.White, slot, sf);
         }
 
-        // toast
+        // Toast notification
         if (_toastT > 0)
         {
             int a = (int)(Math.Min(1f, _toastT) * 230);
-            using var sf = new StringFormat { Alignment = StringAlignment.Center };
-            using var tb = new SolidBrush(Color.FromArgb(a, 255, 255, 255));
+            using var sf     = new StringFormat { Alignment = StringAlignment.Center };
+            using var tb     = new SolidBrush(Color.FromArgb(a, 255, 255, 255));
             using var shadow = new SolidBrush(Color.FromArgb(a, 0, 0, 0));
             g.DrawString(_toast, _hud, shadow, new RectangleF(1, 61, W, 30), sf);
-            g.DrawString(_toast, _hud, tb, new RectangleF(0, 60, W, 30), sf);
+            g.DrawString(_toast, _hud, tb,     new RectangleF(0, 60, W, 30), sf);
         }
     }
 
+    // ===========================================================
+    //  DISPOSE
+    // ===========================================================
     protected override void Dispose(bool disposing)
     {
         if (disposing)
