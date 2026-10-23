@@ -1,264 +1,538 @@
+
+using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using FarmGame.Core;
 
 namespace FarmGame.Entities;
 
-// ============================================================
-//  PLAYER — karakter vector (GDI+ procedural art)
-// ============================================================
-
-/// <summary>
-/// Karakter pemain yang bisa bergerak dengan WASD atau gamepad.
-/// Digambar sepenuhnya secara procedural (vector GDI+) — tidak butuh sprite.
-/// </summary>
 public class Player : GameObject, IRenderable
 {
-    // ---- Fisika ----
     public float VelX { get; private set; }
     public float VelY { get; private set; }
 
-    private const float WalkSpeed   = 180f;
+    public Color SkinColor { get; set; } = Color.FromArgb(255, 190, 145);
+    public Color ShirtColor { get; set; } = Color.FromArgb(48, 112, 210);
+    public Color PantsColor { get; set; } = Color.FromArgb(30, 52, 115);
+    public Color HatColor { get; set; } = Color.FromArgb(190, 43, 57);
+    public Color HairColor { get; set; } = Color.FromArgb(53, 37, 53);
+    public Color ShoeColor { get; set; } = Color.FromArgb(111, 62, 48);
+    public Color AccentColor { get; set; } = Color.FromArgb(255, 183, 78);
+
+    private const float WalkSpeed = 180f;
     private const float SprintSpeed = 320f;
-    private const float Friction    = 12f;
+    private const float Acceleration = 1800f;
+    private const float PixelScale = 4f;
 
-    // ---- Animasi ----
-    private float _walkCycle;   // 0..2π untuk osilasi kaki/tangan
-    private float _bobY;        // bouncing naik-turun saat jalan
-
-    // ---- Visual ----
-    private FacingDir _facing = FacingDir.Down;
+    private float _walkCycle;
+    private float _idleTime;
     private bool _isMoving;
 
-    // Warna karakter (bisa dikustomisasi)
-    public Color SkinColor  { get; set; } = Color.FromArgb(255, 220, 170);
-    public Color ShirtColor { get; set; } = Color.FromArgb(70, 130, 200);
-    public Color PantsColor { get; set; } = Color.FromArgb(50, 80, 140);
-    public Color HatColor   { get; set; } = Color.FromArgb(180, 60, 40);
+    private FacingDir _facing = FacingDir.Down;
 
     private enum FacingDir { Up, Down, Left, Right }
 
-    // ============================================================
+    // Palet outline dan bayangan.
+    private static readonly Color Outline = Color.FromArgb(25, 24, 43);
+    private static readonly Color DeepShadow = Color.FromArgb(36, 30, 52);
+    private static readonly Color HatShade = Color.FromArgb(112, 34, 52);
+    private static readonly Color ScarfColor = Color.FromArgb(232, 54, 57);
+    private static readonly Color BootSole = Color.FromArgb(49, 35, 45);
+    private static readonly Color HairShade = Color.FromArgb(38, 30, 48);
+
     public void Update(InputState input, float dt)
     {
+        if (dt <= 0f) return;
+        dt = Math.Min(dt, 0.05f);
+
+        float ix = Math.Clamp(input.AxisX, -1f, 1f);
+        float iy = Math.Clamp(input.AxisY, -1f, 1f);
+
+        float length = MathF.Sqrt(ix * ix + iy * iy);
+
+        if (length > 1f)
+        {
+            ix /= length;
+            iy /= length;
+        }
+
         float speed = input.Sprint ? SprintSpeed : WalkSpeed;
+        float tx = ix * speed;
+        float ty = iy * speed;
+        float maxDelta = Acceleration * dt;
 
-        // Percepatan dari input
-        float ax = input.AxisX * speed;
-        float ay = input.AxisY * speed;
+        VelX = MoveTowards(VelX, tx, maxDelta);
+        VelY = MoveTowards(VelY, ty, maxDelta);
 
-        // Lerp velocity ke target (friction-based acceleration)
-        VelX = Lerp(VelX, ax, Friction * dt);
-        VelY = Lerp(VelY, ay, Friction * dt);
+        if (MathF.Abs(tx) < 0.01f && MathF.Abs(VelX) < 2f)
+            VelX = 0f;
 
-        // Snap ke nol jika sangat kecil
-        if (MathF.Abs(VelX) < 1f) VelX = 0;
-        if (MathF.Abs(VelY) < 1f) VelY = 0;
+        if (MathF.Abs(ty) < 0.01f && MathF.Abs(VelY) < 2f)
+            VelY = 0f;
 
-        // Gerakkan posisi
         SetPosition(X + VelX * dt, Y + VelY * dt);
 
-        // Animasi
-        _isMoving = VelX != 0 || VelY != 0;
+        _isMoving = MathF.Abs(VelX) > 2f || MathF.Abs(VelY) > 2f;
+
         if (_isMoving)
         {
-            float moveLen = MathF.Sqrt(VelX * VelX + VelY * VelY);
-            _walkCycle += dt * moveLen / 40f; // kecepatan osilasi proporsional
-            _bobY = MathF.Sin(_walkCycle * 2f) * 3f;
+            float magnitude = MathF.Sqrt(VelX * VelX + VelY * VelY);
+            _walkCycle += dt * magnitude / 40f;
 
-            // Update arah hadap berdasarkan kecepatan dominan
             if (MathF.Abs(VelX) > MathF.Abs(VelY))
                 _facing = VelX > 0 ? FacingDir.Right : FacingDir.Left;
-            else
+            else if (MathF.Abs(VelY) > 0.01f)
                 _facing = VelY > 0 ? FacingDir.Down : FacingDir.Up;
+
+            _idleTime = 0f;
         }
         else
         {
-            _bobY = Lerp(_bobY, 0f, 10f * dt);
+            _idleTime += dt;
         }
     }
 
     public void Draw(Graphics g, float time)
     {
-        var state = g.Save();
-        // Pivot di kaki karakter
-        g.TranslateTransform(X, Y + _bobY);
+        GraphicsState state = g.Save();
 
-        switch (_facing)
+        try
         {
-            case FacingDir.Down:  DrawFront(g, time); break;
-            case FacingDir.Up:    DrawBack(g, time);  break;
-            case FacingDir.Left:  DrawSide(g, time, flipX: true);  break;
-            case FacingDir.Right: DrawSide(g, time, flipX: false); break;
-        }
+            // Snap posisi ke grid agar pixel tidak terlihat bergetar.
+            float sx = MathF.Round(X / PixelScale) * PixelScale;
+            float sy = MathF.Round(Y / PixelScale) * PixelScale;
 
-        g.Restore(state);
+            g.TranslateTransform(sx, sy);
+            g.ScaleTransform(PixelScale, PixelScale);
+
+            g.SmoothingMode = SmoothingMode.None;
+            g.PixelOffsetMode = PixelOffsetMode.None;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.CompositingQuality = CompositingQuality.HighSpeed;
+
+            // Bayangan tanah.
+            Rect(g, Color.FromArgb(65, 15, 18, 35), -10, -1, 20, 3);
+
+            // Napas saat idle, bob kecil saat berjalan.
+            float bob = _isMoving
+                ? MathF.Round(MathF.Sin(_walkCycle * 2f))
+                : MathF.Round(MathF.Sin(_idleTime * 2.5f) * 0.25f);
+
+            g.TranslateTransform(0f, bob);
+
+            switch (_facing)
+            {
+                case FacingDir.Down:
+                    DrawFront(g);
+                    break;
+                case FacingDir.Up:
+                    DrawBack(g);
+                    break;
+                case FacingDir.Left:
+                    DrawSide(g, true);
+                    break;
+                case FacingDir.Right:
+                    DrawSide(g, false);
+                    break;
+            }
+        }
+        finally
+        {
+            g.Restore(state);
+        }
     }
 
-    // ---- View: Depan ----
-    private void DrawFront(Graphics g, float time)
+    // ---------------------------------------------------------
+    // DEPAN
+    // ---------------------------------------------------------
+
+    private void DrawFront(Graphics g)
     {
-        float legSwing = _isMoving ? MathF.Sin(_walkCycle) * 10f : 0f;
-        float armSwing = _isMoving ? MathF.Sin(_walkCycle + MathF.PI) * 12f : 0f;
+        int step = _isMoving
+            ? (int)MathF.Round(MathF.Sin(_walkCycle) * 2f)
+            : 0;
 
-        // Kaki kiri & kanan
-        DrawLeg(g, -6f,  0f, -legSwing);
-        DrawLeg(g,  6f,  0f,  legSwing);
+        // Kaki belakang dan depan.
+        DrawLeg(g, -4, step);
+        DrawLeg(g, 4, -step);
 
-        // Badan
-        using var bodyBr = new SolidBrush(ShirtColor);
-        g.FillRectangle(bodyBr, -9f, -28f, 18f, 18f);
+        // Lengan di belakang badan.
+        DrawArm(g, -8, -27, -step, true);
+        DrawArm(g, 8, -27, step, false);
 
-        // Lengan kiri & kanan
-        DrawArm(g, -14f, -26f, -armSwing);
-        DrawArm(g,  14f, -26f,  armSwing);
-
-        // Kepala
-        DrawHead(g, facing: FacingDir.Down);
+        DrawBody(g);
+        DrawOveralls(g, false);
+        DrawScarf(g, false);
+        DrawHead(g, FacingDir.Down);
+        DrawHat(g);
     }
 
-    // ---- View: Belakang ----
-    private void DrawBack(Graphics g, float time)
+    // ---------------------------------------------------------
+    // BELAKANG
+    // ---------------------------------------------------------
+
+    private void DrawBack(Graphics g)
     {
-        float legSwing = _isMoving ? MathF.Sin(_walkCycle) * 10f : 0f;
+        int step = _isMoving
+            ? (int)MathF.Round(MathF.Sin(_walkCycle) * 2f)
+            : 0;
 
-        DrawLeg(g, -6f, 0f, -legSwing);
-        DrawLeg(g,  6f, 0f,  legSwing);
+        DrawLeg(g, -4, step);
+        DrawLeg(g, 4, -step);
 
-        using var bodyBr = new SolidBrush(ShirtColor);
-        g.FillRectangle(bodyBr, -9f, -28f, 18f, 18f);
+        DrawArm(g, -8, -27, step, true);
+        DrawArm(g, 8, -27, -step, false);
 
-        DrawArm(g, -14f, -26f, legSwing);
-        DrawArm(g,  14f, -26f, -legSwing);
+        DrawBody(g);
+        DrawOveralls(g, true);
 
-        DrawHead(g, facing: FacingDir.Up);
+        // Rambut belakang.
+        Rect(g, Outline, -7, -39, 14, 8);
+        Rect(g, HairColor, -6, -39, 12, 7);
+        Rect(g, HairShade, -7, -34, 14, 3);
+
+        // Tali ransel.
+        Rect(g, Outline, -5, -34, 10, 10);
+        Rect(g, ShoeColor, -4, -33, 8, 8);
+        Rect(g, AccentColor, -3, -32, 6, 1);
+
+        DrawScarf(g, true);
+        DrawHead(g, FacingDir.Up);
+        DrawHat(g);
     }
 
-    // ---- View: Samping ----
-    private void DrawSide(Graphics g, float time, bool flipX)
+    // ---------------------------------------------------------
+    // SAMPING
+    // ---------------------------------------------------------
+
+    private void DrawSide(Graphics g, bool left)
     {
-        float legSwing  = _isMoving ? MathF.Sin(_walkCycle) * 14f : 0f;
-        float armSwingF = _isMoving ? MathF.Sin(_walkCycle) * 16f : 0f;
-        float armSwingB = _isMoving ? MathF.Sin(_walkCycle + MathF.PI) * 10f : 0f;
-        float flip = flipX ? -1f : 1f;
+        GraphicsState state = g.Save();
 
-        // Kaki belakang (lebih redup)
-        using (var legBack = new SolidBrush(Darken(PantsColor, 0.6f)))
+        try
         {
-            var lstate = g.Save();
-            g.TranslateTransform(flip * 3f, 0f);
-            g.RotateTransform(-legSwing);
-            g.FillRectangle(new SolidBrush(Darken(PantsColor, 0.6f)), -4f, -10f, 8f, 18f);
-            g.Restore(lstate);
-        }
+            if (left)
+                g.ScaleTransform(-1f, 1f);
 
-        // Kaki depan
+            int step = _isMoving
+                ? (int)MathF.Round(MathF.Sin(_walkCycle) * 2f)
+                : 0;
+
+            DrawLeg(g, -2, -step);
+            DrawLeg(g, 3, step);
+
+            DrawArm(g, -4, -27, -step, true);
+
+            DrawBody(g);
+            DrawOveralls(g, false);
+            DrawScarf(g, false);
+
+            DrawArm(g, 5, -27, step, false);
+
+            // Rambut di belakang kepala.
+            Rect(g, Outline, -5, -40, 12, 9);
+            Rect(g, HairColor, -4, -39, 10, 7);
+
+            // Hidung kecil sebagai penanda arah.
+            DrawHead(g, FacingDir.Right);
+            DrawHat(g);
+        }
+        finally
         {
-            var lstate = g.Save();
-            g.RotateTransform(legSwing);
-            g.FillRectangle(new SolidBrush(PantsColor), -4f, -10f, 8f, 18f);
-            // Sepatu
-            g.FillEllipse(new SolidBrush(Color.FromArgb(40,30,25)), -5f*flip, 5f, 10f, 6f);
-            g.Restore(lstate);
+            g.Restore(state);
         }
-
-        // Badan
-        using var bodyBr = new SolidBrush(ShirtColor);
-        g.FillRectangle(bodyBr, -7f, -28f, 14f, 18f);
-
-        // Lengan belakang
-        {
-            var astate = g.Save();
-            g.TranslateTransform(-flip * 4f, -24f);
-            g.RotateTransform(-armSwingB);
-            g.FillRectangle(new SolidBrush(Darken(ShirtColor, 0.7f)), -3f, 0f, 6f, 14f);
-            g.Restore(astate);
-        }
-
-        // Lengan depan
-        {
-            var astate = g.Save();
-            g.TranslateTransform(flip * 4f, -24f);
-            g.RotateTransform(armSwingF);
-            g.FillRectangle(new SolidBrush(ShirtColor), -3f, 0f, 6f, 14f);
-            g.Restore(astate);
-        }
-
-        DrawHead(g, facing: flipX ? FacingDir.Left : FacingDir.Right);
     }
 
-    // ---- Sub: Kepala ----
+    // ---------------------------------------------------------
+    // BADAN
+    // ---------------------------------------------------------
+
+    private void DrawBody(Graphics g)
+    {
+        // Siluet badan lebih lebar daripada versi sebelumnya.
+        Rect(g, Outline, -7, -31, 14, 13);
+        Rect(g, ShirtColor, -6, -30, 12, 11);
+
+        // Highlight bahu dan lengan baju.
+        Rect(g, Lighten(ShirtColor, 0.35f), -6, -30, 3, 4);
+        Rect(g, Darken(ShirtColor, 0.7f), 3, -29, 3, 7);
+
+        // Leher.
+        Rect(g, Outline, -3, -35, 6, 6);
+        Rect(g, SkinColor, -2, -34, 4, 5);
+    }
+
+    private void DrawOveralls(Graphics g, bool back)
+    {
+        // Overall bib dan bagian celana.
+        Rect(g, Outline, -7, -23, 14, 12);
+        Rect(g, PantsColor, -6, -22, 12, 10);
+
+        // Bagian bib.
+        Rect(g, Outline, -5, -30, 10, 10);
+        Rect(g, Darken(PantsColor, 0.8f), -4, -29, 8, 8);
+        Rect(g, PantsColor, -3, -28, 6, 6);
+
+        // Tali bahu.
+        Rect(g, Outline, -5, -31, 3, 7);
+        Rect(g, Outline, 2, -31, 3, 7);
+        Rect(g, ShirtColor, -4, -30, 1, 5);
+        Rect(g, ShirtColor, 3, -30, 1, 5);
+
+        if (!back)
+        {
+            // Kantong depan.
+            Rect(g, Outline, -3, -26, 6, 5);
+            Rect(g, Lighten(PantsColor, 0.18f), -2, -25, 4, 3);
+
+            Rect(g, AccentColor, -4, -29, 2, 2);
+            Rect(g, AccentColor, 2, -29, 2, 2);
+
+            Rect(g, AccentColor, -1, -24, 2, 1);
+        }
+        else
+        {
+            Rect(g, Darken(PantsColor, 0.7f), -3, -20, 6, 3);
+            Rect(g, Lighten(PantsColor, 0.15f), -2, -20, 4, 1);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // SYAL
+    // ---------------------------------------------------------
+
+    private void DrawScarf(Graphics g, bool back)
+    {
+        Rect(g, HatShade, -5, -35, 10, 4);
+        Rect(g, ScarfColor, -4, -35, 8, 3);
+        Rect(g, Lighten(ScarfColor, 0.25f), -4, -35, 4, 1);
+
+        if (!back)
+        {
+            // Ujung syal turun di depan dada.
+            Rect(g, HatShade, 1, -33, 4, 7);
+            Rect(g, ScarfColor, 2, -32, 2, 5);
+            Rect(g, Lighten(ScarfColor, 0.2f), 2, -32, 1, 2);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // KEPALA DAN WAJAH
+    // ---------------------------------------------------------
+
     private void DrawHead(Graphics g, FacingDir facing)
     {
-        // Leher
-        using var neckBr = new SolidBrush(SkinColor);
-        g.FillRectangle(neckBr, -3f, -34f, 6f, 8f);
+        // Kepala besar dan rambut berlapis.
+        Rect(g, Outline, -8, -45, 16, 12);
+        Rect(g, HairColor, -7, -44, 14, 11);
 
-        // Kepala
-        using var headBr = new SolidBrush(SkinColor);
-        g.FillEllipse(headBr, -11f, -54f, 22f, 24f);
+        Rect(g, Outline, -8, -44, 16, 8);
+        Rect(g, SkinColor, -7, -43, 14, 9);
 
-        // Topi
-        using var hatBr  = new SolidBrush(HatColor);
-        using var brimBr = new SolidBrush(Darken(HatColor, 0.8f));
-        g.FillRectangle(hatBr,  -8f,  -68f, 16f, 16f);   // crown
-        g.FillRectangle(brimBr, -13f, -54f, 26f,  5f);   // brim
+        // Bayangan sisi wajah.
+        Rect(g, Darken(SkinColor, 0.82f), -7, -37, 2, 2);
+        Rect(g, Lighten(SkinColor, 0.22f), -5, -42, 4, 2);
 
-        // Mata (hanya tampak dari depan/samping)
-        if (facing != FacingDir.Up)
+        // Poni.
+        Rect(g, HairShade, -7, -44, 14, 3);
+        Rect(g, HairColor, -6, -44, 12, 2);
+        Rect(g, HairColor, -5, -42, 4, 2);
+        Rect(g, HairColor, 2, -42, 4, 1);
+
+        if (facing == FacingDir.Up)
         {
-            using var eyeBr = new SolidBrush(Color.FromArgb(40, 30, 20));
-            if (facing == FacingDir.Down)
-            {
-                g.FillEllipse(eyeBr, -6f, -48f, 4f, 4f);
-                g.FillEllipse(eyeBr,  2f, -48f, 4f, 4f);
-            }
-            else // samping
-            {
-                float ex = facing == FacingDir.Right ? 3f : -7f;
-                g.FillEllipse(eyeBr, ex, -48f, 4f, 4f);
-            }
+            Rect(g, HairShade, -7, -38, 14, 3);
+            return;
+        }
+
+        if (facing == FacingDir.Down)
+        {
+            DrawEye(g, -4, -39);
+            DrawEye(g, 2, -39);
+
+            // Pipi.
+            Rect(g, Color.FromArgb(190, 112, 91), -6, -36, 2, 1);
+            Rect(g, Color.FromArgb(190, 112, 91), 4, -36, 2, 1);
+
+            // Mulut.
+            Rect(g, HatShade, -1, -35, 2, 1);
+        }
+        else
+        {
+            DrawEye(g, 3, -39);
+            Rect(g, SkinColor, 7, -37, 2, 2);
         }
     }
 
-    // ---- Sub: Kaki ----
-    private void DrawLeg(Graphics g, float px, float py, float angle)
+    private static void DrawEye(Graphics g, int x, int y)
     {
-        var state = g.Save();
-        g.TranslateTransform(px, py - 10f);
-        g.RotateTransform(angle);
-        using var br = new SolidBrush(PantsColor);
-        g.FillRectangle(br, -4f, 0f, 8f, 18f);
-        // Sepatu
-        using var shoe = new SolidBrush(Color.FromArgb(40, 30, 25));
-        g.FillEllipse(shoe, -5f, 14f, 12f, 7f);
-        g.Restore(state);
+        Rect(g, Outline, x, y, 3, 4);
+        Rect(g, Color.FromArgb(24, 28, 48), x, y, 2, 3);
+        Rect(g, Color.White, x, y, 1, 1);
     }
 
-    // ---- Sub: Lengan ----
-    private void DrawArm(Graphics g, float px, float py, float angle)
+    // ---------------------------------------------------------
+    // TOPI PETANI
+    // ---------------------------------------------------------
+
+    private void DrawHat(Graphics g)
     {
-        var state = g.Save();
-        g.TranslateTransform(px, py);
-        g.RotateTransform(angle);
-        using var br = new SolidBrush(ShirtColor);
-        g.FillRectangle(br, -3f, 0f, 6f, 14f);
-        using var skin = new SolidBrush(SkinColor);
-        g.FillEllipse(skin, -3f, 12f, 7f, 7f);
-        g.Restore(state);
+        // Brim lebar: ini yang membuat siluet topi lebih khas.
+        Rect(g, Outline, -10, -47, 20, 4);
+        Rect(g, HatShade, -9, -47, 18, 3);
+        Rect(g, HatColor, -8, -48, 16, 2);
+
+        // Crown.
+        Rect(g, Outline, -7, -54, 14, 9);
+        Rect(g, HatShade, -6, -53, 12, 7);
+        Rect(g, HatColor, -5, -53, 10, 6);
+
+        // Highlight.
+        Rect(g, Lighten(HatColor, 0.3f), -4, -52, 6, 1);
+        Rect(g, Lighten(HatColor, 0.18f), -5, -51, 2, 2);
+
+        // Pita topi.
+        Rect(g, Outline, -6, -48, 12, 2);
+        Rect(g, HatShade, -5, -48, 10, 1);
+        Rect(g, ScarfColor, -4, -48, 8, 1);
+
+        // Pinggiran bawah.
+        Rect(g, DeepShadow, -9, -45, 18, 1);
     }
 
-    // ---- Helpers ----
-    private static float Lerp(float a, float b, float t) => a + (b - a) * Math.Clamp(t, 0f, 1f);
+    // ---------------------------------------------------------
+    // KAKI DAN SEPATU
+    // ---------------------------------------------------------
 
-    private static Color Darken(Color c, float factor) =>
-        Color.FromArgb(c.A, (int)(c.R * factor), (int)(c.G * factor), (int)(c.B * factor));
-
-    /// <summary>Clamp posisi ke dalam batas dunia.</summary>
-    public void ClampToWorld(float worldW, float worldH, float margin = 16f)
+    private void DrawLeg(Graphics g, int x, int swing)
     {
+        GraphicsState state = g.Save();
+
+        try
+        {
+            g.TranslateTransform(x, 0);
+            g.TranslateTransform(swing, 0);
+
+            // Celana pendek ke arah sepatu.
+            Rect(g, Outline, -4, -14, 8, 8);
+            Rect(g, PantsColor, -3, -13, 6, 7);
+            Rect(g, Lighten(PantsColor, 0.18f), -3, -13, 2, 3);
+
+            // Sepatu tebal.
+            Rect(g, BootSole, -5, -7, 11, 6);
+            Rect(g, Outline, -5, -8, 11, 6);
+            Rect(g, ShoeColor, -4, -8, 9, 4);
+            Rect(g, Lighten(ShoeColor, 0.25f), -3, -8, 4, 1);
+            Rect(g, Darken(ShoeColor, 0.7f), 2, -6, 3, 2);
+        }
+        finally
+        {
+            g.Restore(state);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // LENGAN
+    // ---------------------------------------------------------
+
+    private void DrawArm(
+        Graphics g,
+        int x,
+        int y,
+        int swing,
+        bool back)
+    {
+        GraphicsState state = g.Save();
+
+        try
+        {
+            g.TranslateTransform(x, y);
+            g.TranslateTransform(0, swing);
+
+            Color sleeve = back
+                ? Darken(ShirtColor, 0.72f)
+                : ShirtColor;
+
+            Rect(g, Outline, -3, 0, 6, 10);
+            Rect(g, sleeve, -2, 1, 4, 8);
+            Rect(g, Lighten(sleeve, 0.22f), -2, 1, 2, 3);
+
+            // Manset.
+            Rect(g, Darken(sleeve, 0.7f), -2, 7, 4, 2);
+
+            // Tangan.
+            Rect(g, Outline, -3, 9, 6, 5);
+            Rect(g, SkinColor, -2, 9, 4, 4);
+            Rect(g, Lighten(SkinColor, 0.2f), -2, 9, 2, 1);
+        }
+        finally
+        {
+            g.Restore(state);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // UTILITAS
+    // ---------------------------------------------------------
+
+    private static void Rect(
+        Graphics g,
+        Color color,
+        int x,
+        int y,
+        int width,
+        int height)
+    {
+        using var brush = new SolidBrush(color);
+        g.FillRectangle(brush, x, y, width, height);
+    }
+
+    private static float MoveTowards(
+        float current,
+        float target,
+        float maxDelta)
+    {
+        if (MathF.Abs(target - current) <= maxDelta)
+            return target;
+
+        return current +
+            MathF.Sign(target - current) * maxDelta;
+    }
+
+    private static Color Darken(Color c, float factor)
+    {
+        factor = Math.Clamp(factor, 0f, 1f);
+
+        return Color.FromArgb(
+            c.A,
+            (int)(c.R * factor),
+            (int)(c.G * factor),
+            (int)(c.B * factor)
+        );
+    }
+
+    private static Color Lighten(Color c, float amount)
+    {
+        amount = Math.Clamp(amount, 0f, 1f);
+
+        return Color.FromArgb(
+            c.A,
+            (int)(c.R + (255 - c.R) * amount),
+            (int)(c.G + (255 - c.G) * amount),
+            (int)(c.B + (255 - c.B) * amount)
+        );
+    }
+
+    public void ClampToWorld(
+        float worldW,
+        float worldH,
+        float margin = 16f)
+    {
+        margin = Math.Max(0f, margin);
+
         SetPosition(
-            Math.Clamp(X, margin, worldW - margin),
-            Math.Clamp(Y, margin, worldH - margin));
+            Math.Clamp(X, margin, Math.Max(margin, worldW - margin)),
+            Math.Clamp(Y, margin, Math.Max(margin, worldH - margin))
+        );
     }
 }

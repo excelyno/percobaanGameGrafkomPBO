@@ -139,116 +139,268 @@ public class TileMap
     //  RENDER (hanya tile yang terlihat oleh kamera)
     // ============================================================
 
-    public void Draw(System.Drawing.Graphics g, FarmGame.Core.Camera cam)
+public void Draw(System.Drawing.Graphics g, FarmGame.Core.Camera cam)
+{
+    int c0 = Math.Max(0,
+        (int)((cam.X - cam.ViewW / cam.Zoom / 2f) / TileSize) - 1);
+    int r0 = Math.Max(0,
+        (int)((cam.Y - cam.ViewH / cam.Zoom / 2f) / TileSize) - 1);
+
+    int c1 = Math.Min(Cols - 1,
+        c0 + (int)(cam.ViewW / cam.Zoom / TileSize) + 3);
+    int r1 = Math.Min(Rows - 1,
+        r0 + (int)(cam.ViewH / cam.Zoom / TileSize) + 3);
+
+    for (int r = r0; r <= r1; r++)
     {
-        // Culling: hanya gambar tile dalam viewport
-        int c0 = Math.Max(0, (int)((cam.X - cam.ViewW / cam.Zoom / 2f) / TileSize) - 1);
-        int r0 = Math.Max(0, (int)((cam.Y - cam.ViewH / cam.Zoom / 2f) / TileSize) - 1);
-        int c1 = Math.Min(Cols - 1, c0 + (int)(cam.ViewW / cam.Zoom / TileSize) + 3);
-        int r1 = Math.Min(Rows - 1, r0 + (int)(cam.ViewH / cam.Zoom / TileSize) + 3);
-
-        for (int r = r0; r <= r1; r++)
+        for (int c = c0; c <= c1; c++)
         {
-            for (int c = c0; c <= c1; c++)
+            MapCell cell = _cells[c, r];
+
+            float x = c * TileSize;
+            float y = r * TileSize;
+
+            // Warna dasar permukaan.
+            using (var brush = new System.Drawing.SolidBrush(cell.BaseColor))
+                g.FillRectangle(brush, x, y, TileSize, TileSize);
+
+            DrawTileDetail(g, cell.Type, x, y, c, r);
+
+            // Bevel: bagian atas lebih terang, bagian bawah lebih gelap.
+            using (var light = new System.Drawing.Pen(
+                System.Drawing.Color.FromArgb(24, 255, 255, 255), 1f))
+            using (var shadow = new System.Drawing.Pen(
+                System.Drawing.Color.FromArgb(32, 0, 0, 0), 1f))
             {
-                var cell = _cells[c, r];
-                float wx = c * TileSize;
-                float wy = r * TileSize;
-                var rect = new System.Drawing.RectangleF(wx, wy, TileSize, TileSize);
+                g.DrawLine(light, x, y, x + TileSize - 1, y);
+                g.DrawLine(light, x, y, x, y + TileSize - 1);
 
-                // Warna dasar tile
-                using var fill = new System.Drawing.SolidBrush(cell.BaseColor);
-                g.FillRectangle(fill, rect);
+                g.DrawLine(shadow,
+                    x, y + TileSize - 1,
+                    x + TileSize - 1, y + TileSize - 1);
 
-                // Detail visual per tipe
-                DrawTileDetail(g, cell.Type, wx, wy);
-
-                // Grid line tipis
-                using var grid = new System.Drawing.Pen(
-                    System.Drawing.Color.FromArgb(25, 0, 0, 0), 0.5f);
-                g.DrawRectangle(grid, wx, wy, TileSize, TileSize);
+                g.DrawLine(shadow,
+                    x + TileSize - 1, y,
+                    x + TileSize - 1, y + TileSize - 1);
             }
         }
     }
+}
 
-    private static void DrawTileDetail(System.Drawing.Graphics g, TileType type, float x, float y)
+private static void DrawTileDetail(
+    System.Drawing.Graphics g,
+    TileType type,
+    float x,
+    float y,
+    int col,
+    int row)
+{
+    // Pola berdasarkan koordinat, bukan random setiap frame.
+    int seed = Math.Abs((col * 73856093) ^ (row * 19349663));
+
+    switch (type)
     {
-        switch (type)
+        case TileType.Grass:
         {
-            case TileType.Water:
-                // Garis ombak
-                using (var wave = new System.Drawing.Pen(
-                    System.Drawing.Color.FromArgb(80, 100, 160, 220), 1.5f))
-                {
-                    g.DrawLine(wave, x + 6, y + 14, x + 18, y + 14);
-                    g.DrawLine(wave, x + 22, y + 22, x + 38, y + 22);
-                    g.DrawLine(wave, x + 8, y + 32, y + 24, y + 32); // intentional
-                }
-                break;
+            // Variasi rumput kecil.
+            using var dark = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(45, 39, 90, 34));
 
-            case TileType.Tree:
-                // Batang
-                using (var trunk = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(120, 80, 40)))
-                    g.FillRectangle(trunk, x + 18, y + 28, 12, 20);
-                // Kanopi
-                using (var canopy = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(50, 140, 60)))
-                    g.FillEllipse(canopy, x + 4, y + 2, 40, 32);
-                using (var canopy2 = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(70, 170, 80)))
-                    g.FillEllipse(canopy2, x + 8, y + 6, 32, 24);
-                break;
+            using var light = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(55, 200, 235, 115));
 
-            case TileType.Flower:
-                // Bunga kecil acak
-                using (var petal = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(230, 80, 120)))
-                {
-                    g.FillEllipse(petal, x + 10, y + 18, 8, 8);
-                    g.FillEllipse(petal, x + 26, y + 10, 8, 8);
-                    g.FillEllipse(petal, x + 30, y + 28, 8, 8);
-                }
-                break;
+            for (int i = 0; i < 4; i++)
+            {
+                int px = 5 + (seed >> (i * 3) & 31);
+                int py = 5 + (seed >> (i * 4 + 2) & 31);
 
-            case TileType.Path:
-                // Batu kerikil kecil
-                using (var pebble = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(160, 140, 100)))
-                {
-                    g.FillEllipse(pebble, x + 8,  y + 10, 6, 4);
-                    g.FillEllipse(pebble, x + 28, y + 26, 5, 4);
-                    g.FillEllipse(pebble, x + 16, y + 34, 7, 4);
-                }
-                break;
+                g.FillRectangle(dark, x + px, y + py, 3, 2);
 
-            case TileType.Stone:
-                // Arsir batu
-                using (var crack = new System.Drawing.Pen(
-                    System.Drawing.Color.FromArgb(60, 100, 96, 92), 1.5f))
-                {
-                    g.DrawLine(crack, x + 10, y + 10, x + 22, y + 20);
-                    g.DrawLine(crack, x + 30, y + 15, x + 38, y + 30);
-                }
-                break;
+                if (i % 2 == 0)
+                    g.FillRectangle(light, x + px + 1, y + py - 2, 2, 2);
+            }
 
-            case TileType.House:
-                // Atap
-                using (var roof = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(180, 60, 50)))
-                    g.FillPolygon(roof, new[]
-                    {
-                        new System.Drawing.PointF(x + 4, y + 20),
-                        new System.Drawing.PointF(x + 44, y + 20),
-                        new System.Drawing.PointF(x + 24, y + 4),
-                    });
-                // Pintu
-                using (var door = new System.Drawing.SolidBrush(
-                    System.Drawing.Color.FromArgb(100, 60, 30)))
-                    g.FillRectangle(door, x + 18, y + 30, 12, 18);
-                break;
+            break;
+        }
+
+        case TileType.Water:
+        {
+            using var deep = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(45, 20, 65, 145));
+
+            using var shine = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(100, 130, 195, 245));
+
+            using var soft = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(65, 170, 215, 250));
+
+            g.FillRectangle(deep, x + 1, y + 35, TileSize - 2, 11);
+
+            g.FillRectangle(shine, x + 6, y + 10, 13, 2);
+            g.FillRectangle(soft, x + 23, y + 19, 16, 2);
+            g.FillRectangle(shine, x + 11, y + 29, 8, 2);
+            g.FillRectangle(soft, x + 30, y + 38, 10, 2);
+
+            break;
+        }
+
+        case TileType.Path:
+        {
+            using var pebble = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(115, 115, 86));
+
+            using var pebbleLight = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(205, 183, 139));
+
+            g.FillRectangle(pebble, x + 8, y + 11, 4, 3);
+            g.FillRectangle(pebbleLight, x + 9, y + 10, 3, 2);
+
+            g.FillRectangle(pebble, x + 29, y + 27, 5, 3);
+            g.FillRectangle(pebbleLight, x + 30, y + 26, 3, 2);
+
+            g.FillRectangle(pebble, x + 17, y + 38, 4, 2);
+
+            break;
+        }
+
+        case TileType.Farm:
+        {
+            using var groove = new System.Drawing.Pen(
+                System.Drawing.Color.FromArgb(90, 66, 39), 2f);
+
+            using var ridge = new System.Drawing.Pen(
+                System.Drawing.Color.FromArgb(165, 119, 68), 2f);
+
+            for (int yy = 9; yy < TileSize - 4; yy += 10)
+            {
+                g.DrawLine(groove,
+                    x + 4, y + yy,
+                    x + TileSize - 4, y + yy);
+
+                g.DrawLine(ridge,
+                    x + 4, y + yy + 3,
+                    x + TileSize - 4, y + yy + 3);
+            }
+
+            break;
+        }
+
+        case TileType.Tree:
+        {
+            // Bayangan pohon di tanah.
+            using var shadow = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(65, 20, 35, 24));
+
+            g.FillEllipse(shadow, x + 3, y + 28, 43, 17);
+
+            // Batang.
+            using var trunkDark = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(95, 54, 35));
+
+            using var trunk = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(145, 91, 48));
+
+            g.FillRectangle(trunkDark, x + 17, y + 21, 15, 26);
+            g.FillRectangle(trunk, x + 19, y + 22, 10, 24);
+
+            // Kanopi berlapis.
+            using var leafDark = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(30, 94, 43));
+
+            using var leafMid = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(42, 133, 54));
+
+            using var leafLight = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(76, 165, 68));
+
+            g.FillEllipse(leafDark, x + 1, y + 2, 46, 34);
+            g.FillEllipse(leafMid, x + 5, y + 2, 37, 29);
+            g.FillEllipse(leafLight, x + 9, y + 5, 23, 16);
+
+            // Highlight blok.
+            g.FillRectangle(leafLight, x + 12, y + 8, 7, 4);
+
+            break;
+        }
+
+        case TileType.Flower:
+        {
+            using var stem = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(45, 103, 43));
+
+            using var petal = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(245, 82, 126));
+
+            using var center = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(255, 220, 100));
+
+            int fx = 8 + (seed & 15);
+            int fy = 9 + ((seed >> 5) & 18);
+
+            g.FillRectangle(stem, x + fx + 3, y + fy + 4, 2, 8);
+            g.FillRectangle(petal, x + fx, y + fy, 8, 8);
+            g.FillRectangle(center, x + fx + 3, y + fy + 3, 3, 3);
+
+            break;
+        }
+
+        case TileType.Stone:
+        {
+            using var shade = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(65, 45, 45, 45));
+
+            using var highlight = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(65, 230, 225, 215));
+
+            g.FillRectangle(shade, x + 7, y + 8, 32, 30);
+            g.FillRectangle(highlight, x + 8, y + 8, 29, 3);
+            g.FillRectangle(highlight, x + 8, y + 8, 3, 25);
+
+            break;
+        }
+
+        case TileType.House:
+        {
+            // Dinding.
+            using var wall = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(210, 164, 112));
+
+            using var wallShade = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(145, 103, 71));
+
+            using var roof = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(150, 48, 46));
+
+            using var roofLight = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(190, 69, 59));
+
+            g.FillRectangle(wall, x + 7, y + 19, 34, 28);
+            g.FillRectangle(wallShade, x + 34, y + 21, 7, 26);
+
+            g.FillPolygon(roof, new[]
+            {
+                new System.Drawing.PointF(x + 2, y + 21),
+                new System.Drawing.PointF(x + 24, y + 3),
+                new System.Drawing.PointF(x + 46, y + 21)
+            });
+
+            g.FillPolygon(roofLight, new[]
+            {
+                new System.Drawing.PointF(x + 6, y + 19),
+                new System.Drawing.PointF(x + 24, y + 5),
+                new System.Drawing.PointF(x + 24, y + 19)
+            });
+
+            using var door = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(90, 53, 34));
+
+            g.FillRectangle(door, x + 18, y + 30, 12, 17);
+
+            break;
         }
     }
+}
+
 
     // ============================================================
     //  DEFAULT MAP — jika tidak ada file .map
